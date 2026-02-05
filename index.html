@@ -789,12 +789,11 @@ var bumpPrices = {1: 39, 2: 39};
 var basePrice = 20;
 var purchasedItems = [];
 
-// Stripe setup — REPLACE with your real publishable key
+// Stripe setup
 var stripe = Stripe('pk_test_51SxaDtLp4uBvX9WHcAfbT7vDHOdHSwa7ZbXJcwxosox6RxpeyH05P19NQ33PSBV5puEVSGqF139P0NMfV86mU8xm00yMfE4OBx');
 var elements = null;
 var paymentElement = null;
 var stripeCustomerId = null;
-var stripePaymentMethodId = null;
 var stripeReady = false;
 
 function toggleBumpOffer(num) {
@@ -806,6 +805,13 @@ function toggleBumpOffer(num) {
         el.classList.remove('selected');
     }
     updateOrderSummary();
+}
+
+function getTotal() {
+    var total = basePrice;
+    if (selectedBumps[1]) total += 39;
+    if (selectedBumps[2]) total += 39;
+    return total;
 }
 
 function updateOrderSummary() {
@@ -826,55 +832,27 @@ function updateOrderSummary() {
     document.getElementById('payBtnTotal').textContent = '$' + total;
 }
 
-// Initialize Stripe Payment Element when checkout step loads
-async function initStripeCheckout() {
-    if (stripeReady) return; // Already initialized
+// Mount Stripe Payment Element when checkout step loads (deferred mode — no charge yet)
+function initStripeCheckout() {
+    if (stripeReady) return;
 
-    var total = basePrice;
-    if (selectedBumps[1]) total += 39;
-    if (selectedBumps[2]) total += 39;
-
-    try {
-        // Ask our server to create a PaymentIntent
-        var response = await fetch('/api/create-payment', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                amount: total * 100,  // Stripe uses cents
-                description: 'Ecom Websites - Store Activation'
-            })
-        });
-
-        var data = await response.json();
-        if (data.error) {
-            showPaymentError(data.error);
-            return;
-        }
-
-        // Create the Stripe payment form
-        elements = stripe.elements({
-            clientSecret: data.clientSecret,
-            appearance: {
-                theme: 'stripe',
-                variables: {
-                    colorPrimary: '#3b82f6',
-                    borderRadius: '8px',
-                    fontFamily: 'DM Sans, sans-serif'
-                }
+    elements = stripe.elements({
+        mode: 'payment',
+        amount: getTotal() * 100,
+        currency: 'usd',
+        appearance: {
+            theme: 'stripe',
+            variables: {
+                colorPrimary: '#3b82f6',
+                borderRadius: '8px',
+                fontFamily: 'DM Sans, sans-serif'
             }
-        });
+        }
+    });
 
-        paymentElement = elements.create('payment');
-        paymentElement.mount('#payment-element');
-        stripeReady = true;
-
-        // Store the paymentIntentId for later
-        window.currentPaymentIntentId = data.paymentIntentId;
-
-    } catch (err) {
-        showPaymentError('Failed to load payment form. Please refresh and try again.');
-        console.error(err);
-    }
+    paymentElement = elements.create('payment');
+    paymentElement.mount('#payment-element');
+    stripeReady = true;
 }
 
 function showPaymentError(message) {
@@ -887,33 +865,59 @@ function hidePaymentError() {
     document.getElementById('payment-errors').style.display = 'none';
 }
 
-// Called when user clicks "Pay $XX Now" or Apple/Google Pay
+// Called when user clicks "Pay $XX Now"
 async function processCheckout(method) {
     hidePaymentError();
 
-    if (method === 'apple' || method === 'google') {
-        // Apple/Google Pay handled by Stripe Payment Element automatically
-        // For now, just process the card payment
-    }
-
-    var total = basePrice;
-    if (selectedBumps[1]) total += 39;
-    if (selectedBumps[2]) total += 39;
-
+    var total = getTotal();
     var payBtn = document.querySelector('.pay-btn');
     payBtn.disabled = true;
     payBtn.textContent = 'Processing...';
-    showProcessing('Processing payment...', 'Charging $' + total + ' securely via Stripe');
 
     try {
-        // Tell Stripe to confirm the payment with the card info
+        // Step 1: Validate the card form
+        var submitResult = await elements.submit();
+        if (submitResult.error) {
+            payBtn.disabled = false;
+            payBtn.innerHTML = '🔒 Pay <span id="payBtnTotal">$' + total + '</span> Now';
+            showPaymentError(submitResult.error.message);
+            return;
+        }
+
+        showProcessing('Processing payment...', 'Charging $' + total + ' securely via Stripe');
+
+        // Step 2: Create the PaymentIntent NOW (with final amount including bumps)
+        var response = await fetch('/api/create-payment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                amount: total * 100,
+                description: 'Ecom Websites - Store Activation' + 
+                    (selectedBumps[1] ? ' + Fast Suppliers' : '') + 
+                    (selectedBumps[2] ? ' + Extra Products' : '')
+            })
+        });
+
+        var data = await response.json();
+        if (data.error) {
+            hideProcessing();
+            payBtn.disabled = false;
+            payBtn.innerHTML = '🔒 Pay <span id="payBtnTotal">$' + total + '</span> Now';
+            showPaymentError(data.error);
+            return;
+        }
+
+        // Save customer ID for upsells
+        stripeCustomerId = data.customerId;
+
+        // Step 3: Confirm the payment with the card info
         var result = await stripe.confirmPayment({
             elements: elements,
-            redirect: 'if_required',  // Stay on page unless 3D Secure is needed
+            clientSecret: data.clientSecret,
+            redirect: 'if_required',
         });
 
         if (result.error) {
-            // Card was declined or something went wrong
             hideProcessing();
             payBtn.disabled = false;
             payBtn.innerHTML = '🔒 Pay <span id="payBtnTotal">$' + total + '</span> Now';
@@ -922,32 +926,12 @@ async function processCheckout(method) {
         }
 
         // Payment succeeded!
-        var pi = result.paymentIntent;
-
-        // Save customer & payment method for one-click upsells
-        if (pi.customer) stripeCustomerId = pi.customer;
-        if (pi.payment_method) stripePaymentMethodId = pi.payment_method;
-
-        // If customer wasn't returned, fetch from paymentIntent
-        if (!stripeCustomerId && pi.payment_method) {
-            try {
-                // We can get customer from payment method via API
-                // For now, store what we have
-                stripePaymentMethodId = pi.payment_method;
-            } catch (e) {}
-        }
-
-        // Update card display for upsell pages
-        var displays = document.querySelectorAll('.cardLast4Display, #cardLast4');
-        displays.forEach(function(el) { el.textContent = '****'; });
-
-        // Record purchases
         purchasedItems.push('Store Activation ($20)');
         if (selectedBumps[1]) purchasedItems.push('Fast Supplier List ($39)');
         if (selectedBumps[2]) purchasedItems.push('+45 Extra Products ($39)');
 
         hideProcessing();
-        nextStep(); // Move to first upsell
+        nextStep();
 
     } catch (err) {
         hideProcessing();
@@ -958,7 +942,7 @@ async function processCheckout(method) {
     }
 }
 
-// One-click upsell charge (uses saved card)
+// One-click upsell charge (uses saved card via customer ID)
 async function oneClickPurchase(amount, productName) {
     showProcessing('Processing one-click payment...', 'Charging $' + amount + ' securely');
 
@@ -967,10 +951,9 @@ async function oneClickPurchase(amount, productName) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                amount: amount * 100,  // cents
+                amount: amount * 100,
                 description: 'Ecom Websites - ' + productName,
-                customerId: stripeCustomerId,
-                paymentMethodId: stripePaymentMethodId
+                customerId: stripeCustomerId
             })
         });
 
@@ -978,7 +961,7 @@ async function oneClickPurchase(amount, productName) {
         hideProcessing();
 
         if (data.error) {
-            alert('Payment failed: ' + data.error + '\nSkipping to next step.');
+            alert('Payment failed: ' + data.error);
             if (currentStep === 9) {
                 window.location.href = 'https://ecomwebsites.app/setup';
             } else {
@@ -987,7 +970,6 @@ async function oneClickPurchase(amount, productName) {
             return;
         }
 
-        // Success!
         purchasedItems.push(productName + ' ($' + amount + ')');
         if (currentStep === 9) {
             window.location.href = 'https://ecomwebsites.app/setup';
@@ -1027,9 +1009,7 @@ function hideProcessing() {
 
 function updateCardDisplays() {
     var displays = document.querySelectorAll('.cardLast4Display, #cardLast4');
-    displays.forEach(function(el) {
-        el.textContent = '****';
-    });
+    displays.forEach(function(el) { el.textContent = '****'; });
 }
 
 // Card displays update after real payment
