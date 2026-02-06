@@ -9,24 +9,11 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const { amount, description, customerId } = req.body;
+    const { amount, description, customerId, paymentMethodId } = req.body;
 
-    if (!amount || !customerId) {
+    if (!amount || !customerId || !paymentMethodId) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
-
-    // Get the customer's saved payment methods
-    const paymentMethods = await stripe.paymentMethods.list({
-      customer: customerId,
-      type: 'card',
-    });
-
-    if (!paymentMethods.data.length) {
-      return res.status(400).json({ error: 'No saved payment method found' });
-    }
-
-    // Use the first (most recent) saved card
-    const paymentMethodId = paymentMethods.data[0].id;
 
     // Charge the saved card
     const paymentIntent = await stripe.paymentIntents.create({
