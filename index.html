@@ -794,6 +794,7 @@ var stripe = Stripe('pk_test_51SxaDtLp4uBvX9WHcAfbT7vDHOdHSwa7ZbXJcwxosox6RxpeyH
 var elements = null;
 var paymentElement = null;
 var stripeCustomerId = null;
+var stripePaymentMethodId = null;
 var stripeReady = false;
 
 function toggleBumpOffer(num) {
@@ -929,6 +930,10 @@ async function processCheckout(method) {
             return;
         }
 
+        // Payment succeeded! Save payment method for upsells
+        stripeCustomerId = data.customerId;
+        stripePaymentMethodId = result.paymentIntent.payment_method;
+
         // Payment succeeded!
         purchasedItems.push('Store Activation ($20)');
         if (selectedBumps[1]) purchasedItems.push('Fast Supplier List ($39)');
@@ -957,7 +962,8 @@ async function oneClickPurchase(amount, productName) {
             body: JSON.stringify({
                 amount: amount * 100,
                 description: 'Ecom Websites - ' + productName,
-                customerId: stripeCustomerId
+                customerId: stripeCustomerId,
+                paymentMethodId: stripePaymentMethodId
             })
         });
 
