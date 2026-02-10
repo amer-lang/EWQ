@@ -919,6 +919,9 @@ async function processCheckout(method) {
         var result = await stripe.confirmPayment({
             elements: elements,
             clientSecret: data.clientSecret,
+            confirmParams: {
+                return_url: window.location.href,
+            },
             redirect: 'if_required',
         });
 
