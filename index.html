@@ -845,6 +845,7 @@ function initStripeCheckout() {
         mode: 'payment',
         amount: getTotal() * 100,
         currency: 'usd',
+        setupFutureUsage: 'off_session',
         appearance: {
             theme: 'stripe',
             variables: {
